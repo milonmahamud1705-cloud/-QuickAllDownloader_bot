@@ -1,13 +1,26 @@
 import os
 import logging
+from threading import Thread
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 import yt_dlp
 
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# আপনার বটের টোকেন এখানে যুক্ত করা আছে
 BOT_TOKEN = "8786560452:AAHQG7_d-MXlEFsEntmc4mov_nVQRsfyOPE"
+
+# Render-কে লাইভ রাখার জন্য ব্যাকগ্রাউন্ড ওয়েব সার্ভার
+class SimpleHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+        self.wfile.write(b"Bot is Running 24/7!")
+
+def run_web_server():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(("0.0.0.0", port), SimpleHandler)
+    server.serve_forever()
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
@@ -23,7 +36,7 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ অনুগ্রহ করে একটি সঠিক ওয়েব লিংক পাঠান।")
         return
 
-    status_msg = await update.message.reply_text("⏳ ভিডিও এক্সট্র্যাক্ট করা হচ্ছে, অপেক্ষা করুন...")
+    status_msg = await update.message.reply_text("⏳ ভিডিও প্রসেস হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন...")
 
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
@@ -59,6 +72,9 @@ if __name__ == '__main__':
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
         
+    # ব্যাকগ্রাউন্ড ওয়েব সার্ভার চালু
+    Thread(target=run_web_server, daemon=True).start()
+    
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, download_video))
