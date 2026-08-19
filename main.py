@@ -1,4 +1,5 @@
 import os
+import glob
 import logging
 from threading import Thread
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -10,7 +11,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 BOT_TOKEN = "8786560452:AAHQG7_d-MXlEFsEntmc4mov_nVQRsfyOPE"
 
-# Render-কে লাইভ রাখার জন্য ব্যাকগ্রাউন্ড ওয়েব সার্ভার
+# Background web server to keep Render alive 24/7
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -24,8 +25,8 @@ def run_web_server():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     welcome_text = (
-        "👋 স্বাগতম! আমি একটি অল-ইন-ওয়ান ভিডিও ডাউনলোডার বট।\n\n"
-        "যেকোনো ওয়েবসাইটের ভিডিও লিংক পাঠান, আমি সেটি ডাউনলোড করে দেব।"
+        "👋 Welcome! I am an All-in-One Video Downloader Bot.\n\n"
+        "Send me any video link (Instagram, TikTok, Facebook, YouTube, etc.) and I will download it for you!"
     )
     await update.message.reply_text(welcome_text)
 
@@ -33,46 +34,65 @@ async def download_video(update: Update, context: ContextTypes.DEFAULT_TYPE):
     url = update.message.text.strip()
     
     if not (url.startswith("http://") or url.startswith("https://")):
-        await update.message.reply_text("❌ অনুগ্রহ করে একটি সঠিক ওয়েব লিংক পাঠান।")
+        await update.message.reply_text("❌ Please provide a valid URL link.")
         return
 
-    status_msg = await update.message.reply_text("⏳ ভিডিও প্রসেস হচ্ছে, অনুগ্রহ করে অপেক্ষা করুন...")
+    status_msg = await update.message.reply_text("⏳ Processing your video, please wait...")
 
+    # yt-dlp configuration with mobile headers
     ydl_opts = {
         'format': 'best[ext=mp4]/best',
         'outtmpl': 'downloads/%(id)s.%(ext)s',
         'max_filesize': 50 * 1024 * 1024,
         'quiet': True,
         'no_warnings': True,
-        'ignoreerrors': False,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'noplaylist': True,
+        'user_agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1',
+        'http_headers': {
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            'Accept-Language': 'en-US,en;q=0.5',
+        }
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=True)
-            file_path = ydl.prepare_filename(info)
+            video_id = info.get('id', 'video')
 
-        caption = "✅ Downloaded successfully!\n\n🤖 Powered by @QuickAllDownloader_bot"
-        
-        await status_msg.edit_text("📤 ভিডিও টেলিগ্রামে আপলোড হচ্ছে...")
+        # Find downloaded file
+        files = glob.glob(f"downloads/{video_id}.*")
+        if not files:
+            files = glob.glob("downloads/*")
 
-        with open(file_path, 'rb') as video_file:
-            await update.message.reply_video(video=video_file, caption=caption)
-
-        if os.path.exists(file_path):
-            os.remove(file_path)
+        if files:
+            file_path = files[0]
+            await status_msg.edit_text("📤 Uploading video to Telegram...")
             
-        await status_msg.delete()
+            with open(file_path, 'rb') as video_file:
+                await update.message.reply_video(
+                    video=video_file, 
+                    caption="✅ Downloaded successfully!\n\n🤖 Powered by @QuickAllDownloader_bot",
+                    read_timeout=120,
+                    write_timeout=120
+                )
+            
+            if os.path.exists(file_path):
+                os.remove(file_path)
+            await status_msg.delete()
+        else:
+            await status_msg.edit_text("❌ Failed to find the downloaded file.")
 
     except Exception as e:
-        await status_msg.edit_text("❌ ভিডিও ডাউনলোড করা সম্ভব হয়নি। ফাইলের সাইজ ৫০ MB-এর বেশি হতে পারে অথবা লিংকটি কাজ করছে না।")
+        err = str(e)
+        if "File is larger than max_filesize" in err:
+            await status_msg.edit_text("❌ The video is larger than 50 MB (Telegram bot limit).")
+        else:
+            await status_msg.edit_text("❌ Unable to download video. Please ensure the link is valid and public.")
 
 if __name__ == '__main__':
     if not os.path.exists('downloads'):
         os.makedirs('downloads')
         
-    # ব্যাকগ্রাউন্ড ওয়েব সার্ভার চালু
     Thread(target=run_web_server, daemon=True).start()
     
     app = ApplicationBuilder().token(BOT_TOKEN).build()
